@@ -29,6 +29,17 @@
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 
+#ifdef DEBUG
+#define LOG_DEBUG(msg)                                                         \
+  do {                                                                         \
+    errs() << "[DEBUG] " << msg << "\n";                                       \
+  } while (0)
+#else
+#define LOG_DEBUG(msg)                                                         \
+  do {                                                                         \
+  } while (0)
+#endif
+
 using namespace llvm;
 static ManagedStatic<LLVMContext> GlobalContext;
 static LLVMContext &getGlobalContext() { return *GlobalContext; }
