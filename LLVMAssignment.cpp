@@ -67,26 +67,25 @@ char EnableFunctionOptPass::ID = 0;
 struct FuncPtrPass : public ModulePass {
   static char ID; // Pass identification, replacement for typeid
   FuncPtrPass() : ModulePass(ID) {}
-  std::map<unsigned int, std::vector<std::string>> results;
-  std::vector<std::string> tempFuncNames;
+  std::map<unsigned int, std::set<std::string>> results;
+  std::set<std::string> tempFuncNames; // 利用 set 天然的去重特性
 
 private:
   void addFuncName(const std::string funcName) {
-    tempFuncNames.push_back(funcName);
+    tempFuncNames.insert(funcName);
   }
 
   void saveResultAndClearTemp(const unsigned int lineno) {
     auto result = results.find(lineno);
     if (result == results.end()) {
-      // 看起来 pair 是把作为参数的 vector 又复制了一份，
-      // 所以后面将 vector 清空不会影响输出
-      results.insert(std::pair<unsigned int, std::vector<std::string>>(
-          lineno, tempFuncNames));
+      if (!tempFuncNames.empty()) {
+        // 看起来 pair 是把作为参数的 set 又复制了一份，
+        // 所以后面将 set 清空不会影响输出
+        results.insert(std::pair<unsigned int, std::set<std::string>>(
+            lineno, tempFuncNames));
+      }
     } else {
       LOG_DEBUG("I think this will never appear!");
-      // auto &funcNames = result.second;
-      // funcNames.insert(funcNames.end(), tempFuncNames.begin(),
-      // tempFuncNames.end());
     }
     tempFuncNames.clear();
   }
@@ -109,7 +108,7 @@ private:
     for (const Value *income : phiNode->incoming_values()) {
       LOG_DEBUG("Incoming value for PHINode: " << *income);
       if (const Function *func = dyn_cast<Function>(income)) {
-        addFuncName(func->getName().data());
+        handleFunction(func);
       } else if (const PHINode *innerPHINode = dyn_cast<PHINode>(income)) {
         handlePHINode(innerPHINode);
       } else if (const Argument *arg = dyn_cast<Argument>(income)) {
@@ -136,6 +135,13 @@ private:
     }
   }
 
+  void handleFunction(const Function *func) {
+    std::string funcName = func->getName().data();
+    if (funcName != "llvm.dbg.value") {
+      addFuncName(func->getName().data());
+    }
+  }
+
   void handleValue(const Value *value) {
     if (const PHINode *phiNode = dyn_cast<PHINode>(value)) {
       handlePHINode(phiNode);
@@ -153,11 +159,7 @@ private:
     // or null if this is an indirect function invocation.
     if (const Function *func = callInst->getCalledFunction()) {
       // 直接函数调用（或者已经被优化成直接调用的间接函数调用）
-      std::string funcName = func->getName().data();
-      if (funcName == "llvm.dbg.value") {
-        return;
-      }
-      addFuncName(funcName);
+      handleFunction(func);
     } else { // 非直接函数调用
       LOG_DEBUG("Indirect function invocation in line " << lineno << ": "
                                                         << *callInst);
