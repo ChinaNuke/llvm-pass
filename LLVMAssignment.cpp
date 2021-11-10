@@ -90,13 +90,14 @@ private:
       // 实际上还是会出现一行有多个函数调用的情况（如test16）
       auto &funcNames = result->second;
       funcNames.insert(tempFuncNames.begin(), tempFuncNames.end());
+      LOG_DEBUG("Inserted result for line " << lineno);
     }
     tempFuncNames.clear();
   }
 
   void printResults() const {
     for (const auto &out : results) {
-      errs() << out.first << ": ";
+      errs() << out.first << " :";
       const auto &funcNames = out.second;
       for (auto iter = funcNames.begin(); iter != funcNames.end(); iter++) {
         if (iter != funcNames.begin()) {
@@ -133,9 +134,36 @@ private:
       // 获取参数所在函数的调用
       /// TODO: 这个判断可能是不必要的
       if (const CallInst *callInst = dyn_cast<CallInst>(user)) {
-        assert(callInst->getCalledFunction() == parentFunc);
-        Value *operand = callInst->getArgOperand(argIdx);
-        handleValue(operand);
+        LOG_DEBUG("User is: " << *user);
+        LOG_DEBUG("Parent function is: " << *parentFunc);
+        LOG_DEBUG("Called function is: " << *(callInst->getCalledFunction()));
+        const Function *calledFunction = callInst->getCalledFunction();
+        if (calledFunction == parentFunc) {
+          const Value *operand = callInst->getArgOperand(argIdx);
+          handleValue(operand);
+        } else {
+          for (const BasicBlock &bb : *calledFunction) {
+            for (const Instruction &i : bb) {
+              if (const ReturnInst *retInst = dyn_cast<ReturnInst>(&i)) {
+                const Value *retValue = retInst->getReturnValue();
+                if (const Argument *arg = dyn_cast<Argument>(retValue)) {
+                  handleArgument(arg);
+                } else if (const CallInst *callInst = dyn_cast<CallInst>(retValue)) {
+                  const Value *operand = callInst->getArgOperand(argIdx);
+                  if (const Argument *arg = dyn_cast<Argument>(operand)) {
+                    handleArgument(arg);
+                  } else {
+                    LOG_DEBUG("Unhandled operand in handleArgument: " << *operand);
+                  }
+                } else {
+                  LOG_DEBUG("Temp unhandled!" << *retValue);
+                }
+                
+              }
+            }
+          }
+        }
+        
       } else if (const PHINode *phiNode = dyn_cast<PHINode>(user)) {
         for (const User *phiUser : phiNode->users()) {
           if (const CallInst *outerCallInst = dyn_cast<CallInst>(phiUser)) {
@@ -249,10 +277,10 @@ private:
 
 public:
   bool runOnModule(Module &M) override {
-    errs() << "Hello: ";
-    errs().write_escaped(M.getName()) << '\n';
-    M.dump();
-    errs() << "------------------------------\n";
+    // errs() << "Hello: ";
+    // errs().write_escaped(M.getName()) << '\n';
+    // M.dump();
+    // errs() << "------------------------------\n";
 
     for (const Function &f : M) {
       for (const BasicBlock &bb : f) {
