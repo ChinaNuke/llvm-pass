@@ -87,7 +87,9 @@ private:
         LOG_DEBUG("Saved result for line " << lineno);
       }
     } else {
-      LOG_DEBUG("I think this will never appear!");
+      // 实际上还是会出现一行有多个函数调用的情况（如test16）
+      auto &funcNames = result->second;
+      funcNames.insert(tempFuncNames.begin(), tempFuncNames.end());
     }
     tempFuncNames.clear();
   }
