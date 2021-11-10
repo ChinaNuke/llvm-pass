@@ -134,6 +134,15 @@ private:
         assert(callInst->getCalledFunction() == parentFunc);
         Value *operand = callInst->getArgOperand(argIdx);
         handleValue(operand);
+      } else if (const PHINode *phiNode = dyn_cast<PHINode>(user)) {
+        for (const User *phiUser : phiNode->users()) {
+          if (const CallInst *outerCallInst = dyn_cast<CallInst>(phiUser)) {
+            Value *operand = outerCallInst->getArgOperand(argIdx);
+            handleValue(operand);
+          } else {
+            LOG_DEBUG("Unhandled user of PHINode: " << *user);
+          }
+        }
       } else {
         LOG_DEBUG("Unhandled user of parent function of argument: " << *user);
       }
@@ -184,19 +193,44 @@ private:
       if (const CallInst *innerCallInst = dyn_cast<CallInst>(operand)) {
         // CallInst 的内部嵌套 CallInst，说明实际调用的是 Inner CallInst
         // 的返回值，而不是 Inner CallInst 自身。
-        const Function *calledFunc = innerCallInst->getCalledFunction();
-        for (const BasicBlock &bb : *calledFunc) {
-          for (const Instruction &i : bb) {
-            if (const ReturnInst *retInst = dyn_cast<ReturnInst>(&i)) {
-              const Value *retValue = retInst->getReturnValue();
-              LOG_DEBUG("Meet return value: " << *retValue);
-              /// NOTE: 暂且不去盲目使用
-              /// handleValue，否则可能会产生非预期的情况。 完成之后再酌情替换成
-              /// handleValue 调用。
-              if (const Argument *arg = dyn_cast<Argument>(retValue)) {
-                handleArgument(arg);
-              } else {
-                LOG_DEBUG("Unhandled return value: " << *retValue);
+        if (const Function *calledFunc = innerCallInst->getCalledFunction()) {
+          for (const BasicBlock &bb : *calledFunc) {
+            for (const Instruction &i : bb) {
+              if (const ReturnInst *retInst = dyn_cast<ReturnInst>(&i)) {
+                const Value *retValue = retInst->getReturnValue();
+                LOG_DEBUG("Meet return value: " << *retValue);
+                /// NOTE: 暂且不去盲目使用
+                /// handleValue，否则可能会产生非预期的情况。
+                /// 完成之后再酌情替换成 handleValue 调用。
+                if (const Argument *arg = dyn_cast<Argument>(retValue)) {
+                  handleArgument(arg);
+                } else {
+                  LOG_DEBUG("Unhandled return value: " << *retValue);
+                }
+              }
+            }
+          }
+        } else if (true) {
+          const Value *innerCallInstOperand = innerCallInst->getCalledOperand();
+          LOG_DEBUG("innerCallInstOperand: " << *innerCallInstOperand);
+          if (const PHINode *phiNode =
+                  dyn_cast<PHINode>(innerCallInstOperand)) {
+            for (const Value *income_func : phiNode->incoming_values()) {
+              if (const Function *calledFunc =
+                      dyn_cast<Function>(income_func)) {
+                for (const BasicBlock &bb : *calledFunc) {
+                  for (const Instruction &i : bb) {
+                    if (const ReturnInst *retInst = dyn_cast<ReturnInst>(&i)) {
+                      const Value *retValue = retInst->getReturnValue();
+                      LOG_DEBUG("Meet return value (inner): " << *retValue);
+                      if (const Argument *arg = dyn_cast<Argument>(retValue)) {
+                        handleArgument(arg);
+                      } else {
+                        LOG_DEBUG("Unhandled return value: " << *retValue);
+                      }
+                    }
+                  }
+                }
               }
             }
           }
