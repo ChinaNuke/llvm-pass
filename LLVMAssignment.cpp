@@ -87,7 +87,6 @@ private:
         LOG_DEBUG("Saved result for line " << lineno);
       }
     } else {
-      // 实际上还是会出现一行有多个函数调用的情况（如test16）
       auto &funcNames = result->second;
       funcNames.insert(tempFuncNames.begin(), tempFuncNames.end());
       LOG_DEBUG("Inserted result for line " << lineno);
@@ -109,22 +108,6 @@ private:
     }
   }
 
-  void handlePHINode(const PHINode *phiNode) {
-    for (const Value *income : phiNode->incoming_values()) {
-      LOG_DEBUG("Incoming value for PHINode: " << *income);
-      /// TODO: 可以替换成调用 handleValue 函数
-      if (const Function *func = dyn_cast<Function>(income)) {
-        handleFunction(func);
-      } else if (const PHINode *innerPHINode = dyn_cast<PHINode>(income)) {
-        handlePHINode(innerPHINode);
-      } else if (const Argument *arg = dyn_cast<Argument>(income)) {
-        handleArgument(arg);
-      } else {
-        LOG_DEBUG("Unhandled PHINode incoming value: " << *income);
-      }
-    }
-  }
-
   // 对 Argument 进行处理的过程实际上就是找到形参 Argument
   // 所在的函数的所有调用， 从调用中获取实参，再去递归处理。
   void handleArgument(const Argument *arg) {
@@ -132,11 +115,7 @@ private:
     const Function *parentFunc = arg->getParent(); // 形参所在的函数
     for (const User *user : parentFunc->users()) {
       // 获取参数所在函数的调用
-      /// TODO: 这个判断可能是不必要的
       if (const CallInst *callInst = dyn_cast<CallInst>(user)) {
-        LOG_DEBUG("User is: " << *user);
-        LOG_DEBUG("Parent function is: " << *parentFunc);
-        LOG_DEBUG("Called function is: " << *(callInst->getCalledFunction()));
         const Function *calledFunction = callInst->getCalledFunction();
         if (calledFunction == parentFunc) {
           const Value *operand = callInst->getArgOperand(argIdx);
@@ -148,22 +127,20 @@ private:
                 const Value *retValue = retInst->getReturnValue();
                 if (const Argument *arg = dyn_cast<Argument>(retValue)) {
                   handleArgument(arg);
-                } else if (const CallInst *callInst = dyn_cast<CallInst>(retValue)) {
+                } else if (const CallInst *callInst =
+                               dyn_cast<CallInst>(retValue)) {
                   const Value *operand = callInst->getArgOperand(argIdx);
                   if (const Argument *arg = dyn_cast<Argument>(operand)) {
                     handleArgument(arg);
                   } else {
-                    LOG_DEBUG("Unhandled operand in handleArgument: " << *operand);
+                    LOG_DEBUG(
+                        "Unhandled operand in handleArgument: " << *operand);
                   }
-                } else {
-                  LOG_DEBUG("Temp unhandled!" << *retValue);
                 }
-                
               }
             }
           }
         }
-        
       } else if (const PHINode *phiNode = dyn_cast<PHINode>(user)) {
         for (const User *phiUser : phiNode->users()) {
           if (const CallInst *outerCallInst = dyn_cast<CallInst>(phiUser)) {
@@ -186,19 +163,35 @@ private:
     }
   }
 
+  void handlePHINode(const PHINode *phiNode) {
+    for (const Value *income : phiNode->incoming_values()) {
+      LOG_DEBUG("Incoming value for PHINode: " << *income);
+      handleValue(income);
+    }
+  }
+
   void handleValue(const Value *value) {
     if (const PHINode *phiNode = dyn_cast<PHINode>(value)) {
       handlePHINode(phiNode);
     } else if (const Argument *arg = dyn_cast<Argument>(value)) {
       handleArgument(arg);
     } else if (const CallInst *call = dyn_cast<CallInst>(value)) {
-      LOG_DEBUG("Handling CallInst in function handleValue: " << *call);
       handleCallInst(call);
     } else if (const Function *func = dyn_cast<Function>(value)) {
-      LOG_DEBUG("Handling Function in function handleValue: " << *func);
       handleFunction(func);
     } else {
       LOG_DEBUG("Unhandled Value: " << *value);
+    }
+  }
+
+  void handleFunctionReturn(const Function *func) {
+    for (const BasicBlock &bb : *func) {
+      for (const Instruction &i : bb) {
+        if (const ReturnInst *retInst = dyn_cast<ReturnInst>(&i)) {
+          const Value *retValue = retInst->getReturnValue();
+          handleValue(retValue);
+        }
+      }
     }
   }
 
@@ -224,43 +217,17 @@ private:
         // CallInst 的内部嵌套 CallInst，说明实际调用的是 Inner CallInst
         // 的返回值，而不是 Inner CallInst 自身。
         if (const Function *calledFunc = innerCallInst->getCalledFunction()) {
-          for (const BasicBlock &bb : *calledFunc) {
-            for (const Instruction &i : bb) {
-              if (const ReturnInst *retInst = dyn_cast<ReturnInst>(&i)) {
-                const Value *retValue = retInst->getReturnValue();
-                LOG_DEBUG("Meet return value: " << *retValue);
-                /// NOTE: 暂且不去盲目使用
-                /// handleValue，否则可能会产生非预期的情况。
-                /// 完成之后再酌情替换成 handleValue 调用。
-                if (const Argument *arg = dyn_cast<Argument>(retValue)) {
-                  handleArgument(arg);
-                } else {
-                  LOG_DEBUG("Unhandled return value: " << *retValue);
-                }
-              }
-            }
-          }
-        } else if (true) {
+          handleFunctionReturn(calledFunc);
+        } else { // 这里是 innerFunction 又是间接调用的情况
           const Value *innerCallInstOperand = innerCallInst->getCalledOperand();
           LOG_DEBUG("innerCallInstOperand: " << *innerCallInstOperand);
+
           if (const PHINode *phiNode =
                   dyn_cast<PHINode>(innerCallInstOperand)) {
             for (const Value *income_func : phiNode->incoming_values()) {
               if (const Function *calledFunc =
                       dyn_cast<Function>(income_func)) {
-                for (const BasicBlock &bb : *calledFunc) {
-                  for (const Instruction &i : bb) {
-                    if (const ReturnInst *retInst = dyn_cast<ReturnInst>(&i)) {
-                      const Value *retValue = retInst->getReturnValue();
-                      LOG_DEBUG("Meet return value (inner): " << *retValue);
-                      if (const Argument *arg = dyn_cast<Argument>(retValue)) {
-                        handleArgument(arg);
-                      } else {
-                        LOG_DEBUG("Unhandled return value: " << *retValue);
-                      }
-                    }
-                  }
-                }
+                handleFunctionReturn(calledFunc);
               }
             }
           }
@@ -288,8 +255,6 @@ public:
           if (const CallInst *callInst = dyn_cast<CallInst>(&i)) {
             handleCallInst(callInst);
             saveResultAndClearTemp(callInst->getDebugLoc().getLine());
-          } else {
-            // LOG_DEBUG("Unhandled instruction: " << i);
           }
         }
       }
